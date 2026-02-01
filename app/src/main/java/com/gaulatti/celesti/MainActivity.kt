@@ -3,6 +3,7 @@ package com.gaulatti.celesti
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -19,10 +20,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -32,17 +35,28 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
+import androidx.tv.material3.Button
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
@@ -50,16 +64,17 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import com.gaulatti.celesti.device.DeviceManager
 import com.gaulatti.celesti.service.TVControlService
-import com.gaulatti.celesti.ui.theme.CelestiTheme
-import com.gaulatti.celesti.ui.theme.EncodeSans
-import com.gaulatti.celesti.ui.theme.LibreFranklin
+import com.gaulatti.celesti.theme.CelestiTheme
+import com.gaulatti.celesti.theme.EncodeSans
+import com.gaulatti.celesti.theme.LibreFranklin
 import kotlinx.coroutines.delay
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
 enum class RegistrationState {
     PENDING,
-    STANDBY
+    STANDBY,
+    DEMO_MODE
 }
 
 class MainActivity : ComponentActivity() {
@@ -98,23 +113,31 @@ fun RegistrationFlow(
 ) {
     var state by remember { mutableStateOf(RegistrationState.PENDING) }
     
-    Column(modifier = Modifier.fillMaxSize()) {
-        // Header with logo
-        Header()
-        
-        // Main content
-        when (state) {
-            RegistrationState.PENDING -> {
-                PendingScreen(
-                    deviceId = deviceId,
-                    onRegistered = {
-                        state = RegistrationState.STANDBY
-                        onRegistered()
-                    }
-                )
-            }
-            RegistrationState.STANDBY -> {
-                StandbyScreen()
+    if (state == RegistrationState.DEMO_MODE) {
+        DemoModeScreen(onBack = { state = RegistrationState.PENDING })
+    } else {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Header with logo
+            Header()
+            
+            // Main content
+            when (state) {
+                RegistrationState.PENDING -> {
+                    PendingScreen(
+                        deviceId = deviceId,
+                        onRegistered = {
+                            state = RegistrationState.STANDBY
+                            onRegistered()
+                        },
+                        onDemoMode = {
+                            state = RegistrationState.DEMO_MODE
+                        }
+                    )
+                }
+                RegistrationState.STANDBY -> {
+                    StandbyScreen()
+                }
+                else -> {}
             }
         }
     }
@@ -199,7 +222,8 @@ fun getCurrentTimeString(): String {
 @Composable
 fun PendingScreen(
     deviceId: String,
-    onRegistered: () -> Unit
+    onRegistered: () -> Unit,
+    onDemoMode: () -> Unit
 ) {
     val client = remember { OkHttpClient() }
     
@@ -270,6 +294,20 @@ fun PendingScreen(
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
                 modifier = Modifier.padding(top = 32.dp)
             )
+            
+            // Demo Mode Button
+            Button(
+                onClick = onDemoMode,
+                modifier = Modifier
+                    .padding(top = 48.dp)
+                    .clip(RoundedCornerShape(8.dp))
+            ) {
+                Text(
+                    text = "Demo Mode",
+                    fontSize = 18.sp,
+                    fontFamily = EncodeSans
+                )
+            }
         }
         
         Spacer(modifier = Modifier.width(64.dp))
@@ -326,6 +364,101 @@ fun generateQRCode(content: String, size: Int): ImageBitmap? {
         bitmap.asImageBitmap()
     } catch (e: Exception) {
         null
+    }
+}
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun DemoModeScreen(onBack: () -> Unit) {
+    BackHandler(onBack = onBack)
+    var isBuffering by remember { mutableStateOf(true) }
+    
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Video player
+        val context = LocalContext.current
+        val lifecycleOwner = LocalLifecycleOwner.current
+        
+        val exoPlayer = remember {
+            val videoUrls = listOf(
+                // RTL 102.5
+                "https://streamcdnc1-dd782ed59e2a4e86aabf6fc508674b59.msvdn.net/live/S97044836/tbbP8T1ZRPBL/playlist_video.m3u8",
+
+                // bbel
+                "https://jireh-4-hls-video-us-isp.dps.live/hls-video/339f69c6122f6d8f4574732c235f09b7683e31a5/bbtv/bbtv.smil/playlist.m3u8?dpssid=b2487492604697fbad33e661&sid=ba5t1l1xb21480979815697fbad4f29eb&ndvc=0"
+            )
+            val randomUrl = videoUrls.random()
+
+            ExoPlayer.Builder(context).build().apply {
+                val mediaItem = MediaItem.fromUri(randomUrl)
+                setMediaItem(mediaItem)
+                prepare()
+                playWhenReady = true
+            }
+        }
+        
+        DisposableEffect(exoPlayer) {
+            val listener = object : Player.Listener {
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    isBuffering = playbackState == Player.STATE_BUFFERING
+                }
+            }
+            exoPlayer.addListener(listener)
+            onDispose {
+                exoPlayer.removeListener(listener)
+            }
+        }
+        
+        DisposableEffect(lifecycleOwner) {
+            val observer = LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_PAUSE) {
+                    exoPlayer.pause()
+                } else if (event == Lifecycle.Event.ON_RESUME) {
+                    exoPlayer.play()
+                }
+            }
+            lifecycleOwner.lifecycle.addObserver(observer)
+            
+            onDispose {
+                lifecycleOwner.lifecycle.removeObserver(observer)
+                exoPlayer.release()
+            }
+        }
+        
+        AndroidView(
+            factory = { ctx ->
+                PlayerView(ctx).apply {
+                    player = exoPlayer
+                    useController = false
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+        
+        // Header with faded background
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.4f)
+                .background(
+                    brush = Brush.verticalGradient(
+                        0.0f to MaterialTheme.colorScheme.background,
+                        0.2f to MaterialTheme.colorScheme.background.copy(alpha = 0.9f),
+                        0.4f to MaterialTheme.colorScheme.background.copy(alpha = 0.7f),
+                        0.6f to MaterialTheme.colorScheme.background.copy(alpha = 0.3f),
+                        1.0f to MaterialTheme.colorScheme.background.copy(alpha = 0f)
+                    )
+                )
+        ) {
+            Header()
+        }
+
+        if (isBuffering) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                 AndroidView(factory = { android.widget.ProgressBar(it) })
+            }
+        }
     }
 }
 

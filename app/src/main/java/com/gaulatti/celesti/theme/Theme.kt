@@ -1,4 +1,4 @@
-package com.gaulatti.celesti.ui.theme
+package com.gaulatti.celesti.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable

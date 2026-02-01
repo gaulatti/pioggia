@@ -1,4 +1,4 @@
-package com.gaulatti.celesti.ui.theme
+package com.gaulatti.celesti.theme
 
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
