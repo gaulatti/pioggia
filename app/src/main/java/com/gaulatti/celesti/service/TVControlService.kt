@@ -33,7 +33,7 @@ class TVControlService : Service() {
     
     companion object {
         // Backend SSE endpoint URL
-        private const val SSE_URL = "https://celesti.gaulatti.com/events"
+        private const val SSE_URL = "https://api.celesti.gaulatti.com/sse/events"
     }
     
     override fun onCreate() {

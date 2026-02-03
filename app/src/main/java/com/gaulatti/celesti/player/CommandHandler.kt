@@ -7,6 +7,7 @@ import android.util.Log
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import com.gaulatti.celesti.model.Command
+import com.gaulatti.celesti.VideoPlayerActivity
 
 /**
  * Handles playback commands: YouTube via intent, HLS/m3u via ExoPlayer.
@@ -14,7 +15,6 @@ import com.gaulatti.celesti.model.Command
 class CommandHandler(private val context: Context) {
     
     private val TAG = "CommandHandler"
-    private var exoPlayer: ExoPlayer? = null
     
     /**
      * Handle a command from the SSE stream.
@@ -53,7 +53,7 @@ class CommandHandler(private val context: Context) {
     
     /**
      * Handle m3u/HLS stream playback command.
-     * Uses ExoPlayer to play the stream.
+     * Launches VideoPlayerActivity to play the stream.
      */
     private fun handleM3U(url: String?) {
         if (url.isNullOrBlank()) {
@@ -64,21 +64,14 @@ class CommandHandler(private val context: Context) {
         try {
             Log.d(TAG, "Playing m3u stream: $url")
             
-            // Stop any existing playback
-            stopExoPlayer()
-            
-            // Create new ExoPlayer instance
-            exoPlayer = ExoPlayer.Builder(context).build().apply {
-                // Create media item from URL
-                val mediaItem = MediaItem.fromUri(url)
-                setMediaItem(mediaItem)
-                
-                // Prepare and play
-                prepare()
-                playWhenReady = true
+            // Launch video player activity
+            val intent = Intent(context, VideoPlayerActivity::class.java).apply {
+                putExtra(VideoPlayerActivity.EXTRA_VIDEO_URL, url)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
             }
+            context.startActivity(intent)
             
-            Log.d(TAG, "ExoPlayer started")
+            Log.d(TAG, "VideoPlayerActivity launched")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start m3u playback", e)
         }
@@ -86,11 +79,10 @@ class CommandHandler(private val context: Context) {
     
     /**
      * Handle stop command.
-     * Stops and releases ExoPlayer.
+     * No-op for now, as we're using a separate activity.
      */
     private fun handleStop() {
-        Log.d(TAG, "Stopping playback")
-        stopExoPlayer()
+        Log.d(TAG, "Stop command received (activity-based playback)")
     }
     
     /**
@@ -103,23 +95,10 @@ class CommandHandler(private val context: Context) {
     }
     
     /**
-     * Stop and release ExoPlayer if active.
-     */
-    private fun stopExoPlayer() {
-        exoPlayer?.let { player ->
-            Log.d(TAG, "Releasing ExoPlayer")
-            player.stop()
-            player.release()
-        }
-        exoPlayer = null
-    }
-    
-    /**
      * Release all resources.
      * Should be called when the service is destroyed.
      */
     fun release() {
         Log.d(TAG, "Releasing CommandHandler resources")
-        stopExoPlayer()
     }
 }

@@ -2,6 +2,7 @@ package com.gaulatti.celesti
 
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -68,6 +69,8 @@ import com.gaulatti.celesti.theme.CelestiTheme
 import com.gaulatti.celesti.theme.EncodeSans
 import com.gaulatti.celesti.theme.LibreFranklin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -96,6 +99,7 @@ class MainActivity : ComponentActivity() {
                         deviceId = deviceId,
                         onRegistered = {
                             // Start the TV control service when registered
+                            Log.i("MainActivity", "Device registered, starting TVControlService")
                             val serviceIntent = Intent(this@MainActivity, TVControlService::class.java)
                             startForegroundService(serviceIntent)
                         }
@@ -228,32 +232,51 @@ fun PendingScreen(
     val client = remember { OkHttpClient() }
     
     LaunchedEffect(Unit) {
+        Log.d("RegistrationFlow", "Starting registration polling for device: $deviceId")
         while (true) {
             try {
-                val request = Request.Builder()
-                    .url("https://celesti.gaulatti.com/devices/whoami")
-                    .header("X-Device-ID", deviceId)
-                    .get()
-                    .build()
+                val url = "https://api.celesti.gaulatti.com/devices/whoami"
+                Log.d("RegistrationFlow", "Polling: $url with device ID: $deviceId")
                 
-                val response = client.newCall(request).execute()
-                
-                when (response.code) {
-                    204 -> {
-                        response.close()
-                        onRegistered()
-                        return@LaunchedEffect
-                    }
-                    404 -> {
-                        response.close()
-                        // Continue polling
-                    }
-                    else -> {
-                        response.close()
-                        // Continue polling on other errors
+                val isRegistered = withContext(Dispatchers.IO) {
+                    val request = Request.Builder()
+                        .url(url)
+                        .header("X-Device-ID", deviceId)
+                        .get()
+                        .build()
+                    
+                    val response = client.newCall(request).execute()
+                    val responseCode = response.code
+                    val responseBody = response.body?.string() ?: "(empty)"
+                    
+                    Log.d("RegistrationFlow", "Response code: $responseCode, body: $responseBody")
+                    
+                    when (responseCode) {
+                        204 -> {
+                            Log.i("RegistrationFlow", "Device registered! Transitioning to standby")
+                            response.close()
+                            true
+                        }
+                        404 -> {
+                            Log.d("RegistrationFlow", "Device not yet registered (404), continuing to poll")
+                            response.close()
+                            false
+                        }
+                        else -> {
+                            Log.w("RegistrationFlow", "Unexpected response code: $responseCode, body: $responseBody")
+                            response.close()
+                            false
+                        }
                     }
                 }
+                
+                if (isRegistered) {
+                    onRegistered()
+                    return@LaunchedEffect
+                }
+                
             } catch (e: Exception) {
+                Log.e("RegistrationFlow", "Error polling registration status: ${e.message}", e)
                 // Continue polling on network errors
             }
             
@@ -319,7 +342,7 @@ fun PendingScreen(
             verticalArrangement = Arrangement.Center
         ) {
             val qrBitmap = remember(deviceId) {
-                generateQRCode("https://celesti.gaulatti.com/register/$deviceId", 400)
+                generateQRCode("https://api.celesti.gaulatti.com/register/$deviceId", 400)
             }
             
             qrBitmap?.let {
@@ -373,8 +396,17 @@ fun DemoModeScreen(onBack: () -> Unit) {
     var isBuffering by remember { mutableStateOf(true) }
     
     Box(modifier = Modifier.fillMaxSize()) {
-        // Video player
         val context = LocalContext.current
+        val window = (context as? android.app.Activity)?.window
+        
+        DisposableEffect(Unit) {
+            window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            onDispose {
+                window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+        }
+        
+        // Video player
         val lifecycleOwner = LocalLifecycleOwner.current
         
         val exoPlayer = remember {
@@ -399,6 +431,20 @@ fun DemoModeScreen(onBack: () -> Unit) {
             val listener = object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     isBuffering = playbackState == Player.STATE_BUFFERING
+                    
+                    // Restart playback if it ended
+                    if (playbackState == Player.STATE_ENDED) {
+                        exoPlayer.seekTo(0)
+                        exoPlayer.prepare()
+                        exoPlayer.playWhenReady = true
+                    }
+                }
+                
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    // Reconnect on error by re-preparing the player
+                    android.util.Log.e("DemoMode", "Playback error: ${error.message}, reconnecting...")
+                    exoPlayer.prepare()
+                    exoPlayer.playWhenReady = true
                 }
             }
             exoPlayer.addListener(listener)
